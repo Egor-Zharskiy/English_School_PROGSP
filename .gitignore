@@ -1,0 +1,7 @@
+.env
+.DS_store
+.idea
+.kursdbdata
+app/migrations
+alembic.ini
+app/alembic.ini

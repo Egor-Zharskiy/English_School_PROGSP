@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.models.auth import User
+from app.models.courses import User
 from app.config.auth import auth_backend
 from app.utils.auth_manager import get_user_manager
 from app.schemas.users import UserRead, UserCreate, BaseUser, UserUpdate

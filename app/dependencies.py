@@ -1,6 +1,6 @@
 from fastapi import Depends
 from fastapi_users import FastAPIUsers
-from app.models.auth import User
+from app.models.courses import User
 from app.utils.auth_manager import get_user_manager
 from app.config.auth import auth_backend
 

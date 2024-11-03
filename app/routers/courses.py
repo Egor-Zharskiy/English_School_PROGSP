@@ -1,17 +1,14 @@
-from fastapi import Depends, APIRouter, status
-from fastapi_users import FastAPIUsers
-from fastapi.responses import JSONResponse
+from fastapi import Depends, APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
 
 from app.schemas.users import BaseUser
 from app.dependencies import get_current_user, get_current_superuser
 from app.database import get_async_session
-from app.models.courses import Language
 from app.schemas.courses import LanguageSchema, CreateCourseSchema, EditCourseSchema
-from app.services.courses import LanguageService
-from schemas.courses import CourseFormatSchema, AgeGroupSchema, LevelSchema
-from services.courses import CourseFormatService, AgeGroupService, LevelService, CourseService
+from app.services.courses import LanguageService, CourseGroupService
+from schemas.courses import CourseFormatSchema, AgeGroupSchema, LevelSchema, CreateCourseRequestSchema, \
+    EditCourseRequest
+from services.courses import CourseFormatService, AgeGroupService, LevelService, CourseService, CourseRequestService
 
 router = APIRouter(prefix="/courses", tags=['courses'])
 
@@ -215,3 +212,54 @@ async def edit_course(course_id: int, data: EditCourseSchema, BaseUser=Depends(g
     course_service = CourseService(session)
     result = await course_service.edit_course(course_id, data)
     return result
+
+
+@router.post('/create_course_request')
+async def create_course_request(data: CreateCourseRequestSchema,
+                                session: AsyncSession = Depends(get_async_session),
+                                BaseUser=Depends(get_current_user)):
+    request_service = CourseRequestService(session)
+    user_id = BaseUser.id
+    result = await request_service.create_course_request(user_id, data.course_id)
+    return result
+
+
+@router.delete('/delete_course_request')
+async def delete_course_request(course_id: int, session: AsyncSession = Depends(get_async_session),
+                                BaseUser=Depends(get_current_superuser)):
+    request_service = CourseRequestService(session)
+    result = await request_service.delete_course_request(course_id)
+    return result
+
+
+@router.patch('/edit_course_request')
+async def edit_course_request(course_request_id: int, data: EditCourseRequest,
+                              session: AsyncSession = Depends(get_async_session),
+                              BaseUser=Depends(get_current_superuser)):
+    request_service = CourseRequestService(session)
+    result = await request_service.update_course_request(course_request_id, data)
+    return result
+
+
+@router.get('/get_course_requests')
+async def get_course_requests(session: AsyncSession = Depends(get_async_session),
+                              BaseUser=Depends(get_current_user)):
+    request_service = CourseRequestService(session)
+    result = await request_service.get_course_requests()
+    return result
+
+
+@router.post('/create_group')
+async def create_group(course_id: int, group_name: str, session: AsyncSession = Depends(get_async_session)):
+    service = CourseGroupService(session)
+    group = await service.create_group(course_id, group_name)
+    return group
+
+
+@router.post('/add_user_to_group')
+async def add_user_to_group(group_id: int, user_id: int, session: AsyncSession = Depends(get_async_session)):
+    service = CourseGroupService(session)
+    group = await service.add_user_to_group(group_id, user_id)
+    if group:
+        return {"message": "User added to group"}
+    return {"message": "Group or user not found"}

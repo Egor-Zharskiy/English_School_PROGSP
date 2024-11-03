@@ -1,16 +1,18 @@
+import datetime
 import logging
 
 from fastapi import HTTPException, status
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy.exc import NoResultFound, IntegrityError
+from sqlalchemy.exc import NoResultFound, IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, insert
 from fastapi.responses import JSONResponse
+from starlette.status import HTTP_200_OK
 
-from app.models.courses import Language, Course, CourseLevel
-from models.courses import CourseFormat, AgeGroup, Level
+from app.models.courses import Language, Course, CourseLevel, CourseGroup, User, GroupUser
+from models.courses import CourseFormat, AgeGroup, Level, CourseRequest
 from schemas.courses import LanguageSchema, CourseFormatSchema, AgeGroupSchema, LevelSchema, CreateCourseSchema, \
-    EditCourseSchema
+    EditCourseSchema, CourseRequestResponse, EditCourseRequest
 
 
 class BaseService:
@@ -575,3 +577,119 @@ class CourseService:
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Unexpected error occurred" + str(e))
+
+
+class CourseRequestService:
+    def __init__(self, session: AsyncSession):
+        self.logger = logging.getLogger("Course request service")
+        self.session = session
+
+    async def create_course_request(self, user_id: int, course_id: int):
+
+        existing_course = await self.session.get(Course, course_id)
+        if not existing_course:
+            raise HTTPException(status_code=404, detail="Курс с данным ID не найден")
+
+        existing_request = select(CourseRequest).where(CourseRequest.user_id == user_id,
+                                                       CourseRequest.course_id == course_id)
+        query = await self.session.execute(existing_request)
+        existing_request = query.scalars().first()
+        if existing_request:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="Вы уже отправляли заявку на данный курс!!!")
+
+        new_request = CourseRequest(
+            user_id=user_id,
+            course_id=course_id,
+            status="pending",
+            is_processed=False,
+            is_archived=False
+        )
+        self.session.add(new_request)
+        await self.session.commit()
+        return JSONResponse(status_code=HTTP_200_OK,
+                            content=CourseRequestResponse.model_validate(new_request).model_dump())
+
+    async def delete_course_request(self, course_request_id: int):
+        try:
+            stmt = delete(CourseRequest).where(CourseRequest.id == course_request_id)
+            await self.session.execute(stmt)
+            await self.session.commit()
+            return JSONResponse(status_code=status.HTTP_200_OK,
+                                content="deleted successfully")
+
+        except Exception as e:
+            self.logger.error(f"Error: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Course request not found."
+            )
+
+    async def update_course_request(self, request_id: int, data: EditCourseRequest):
+        course_request = await self.session.get(CourseRequest, request_id)
+        if not course_request:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="course request with given id not found")
+
+        if data.status is not None:
+            course_request.status = data.status
+        if data.is_processed is not None:
+            course_request.is_processed = data.is_processed
+        if data.is_archived is not None:
+            course_request.is_archived = data.is_archived
+
+        self.session.add(course_request)
+        await self.session.commit()
+        return JSONResponse(status_code=status.HTTP_200_OK,
+                            content=EditCourseRequest.model_validate(course_request).model_dump())
+
+    async def get_course_requests(self):
+        try:
+            stmt = select(CourseRequest)
+            result = await self.session.execute(stmt)
+            requests = result.scalars().all()
+            return requests
+
+        except NoResultFound as e:
+            self.logger.error("Noresult " + str(e))
+            return None
+
+        except Exception as e:
+            self.logger.error("Exception " + str(e))
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Course format's not found."
+            )
+
+
+class CourseGroupService:
+    def __init__(self, session):
+        self.session = session
+
+    async def create_group(self, course_id: int, group_name: str):
+        new_group = CourseGroup(course_id=course_id, group_name=group_name)
+        self.session.add(new_group)
+        await self.session.commit()
+        return new_group
+
+    async def add_user_to_group(self, group_id: int, user_id: int):
+        group_exists = await self.session.execute(
+            select(CourseGroup).where(CourseGroup.id == group_id)
+        )
+        user_exists = await self.session.execute(
+            select(User).where(User.id == user_id)
+        )
+
+        group = group_exists.scalar_one_or_none()
+        user = user_exists.scalar_one_or_none()
+
+        if not group or not user:
+            return None
+
+        try:
+            stmt = insert(GroupUser).values(group_id=group_id, user_id=user_id)
+            await self.session.execute(stmt)
+            await self.session.commit()
+            return {"message": "User added to group successfully"}
+        except SQLAlchemyError as e:
+            await self.session.rollback()
+            return {"error": str(e)}

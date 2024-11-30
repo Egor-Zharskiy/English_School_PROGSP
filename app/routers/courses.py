@@ -1,14 +1,18 @@
-from fastapi import Depends, APIRouter
+from logging import setLogRecordFactory
+from typing import Optional
+
+from fastapi import Depends, APIRouter, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.responses import JSONResponse
 
 from app.schemas.users import BaseUser
 from app.dependencies import get_current_user, get_current_superuser
 from app.database import get_async_session
 from app.schemas.courses import LanguageSchema, CreateCourseSchema, EditCourseSchema
-from app.services.courses import LanguageService, CourseGroupService
-from schemas.courses import CourseFormatSchema, AgeGroupSchema, LevelSchema, CreateCourseRequestSchema, \
+from app.services.courses import LanguageService, CourseGroupService, GradeService
+from app.schemas.courses import CourseFormatSchema, AgeGroupSchema, LevelSchema, CreateCourseRequestSchema, \
     EditCourseRequest
-from services.courses import CourseFormatService, AgeGroupService, LevelService, CourseService, CourseRequestService
+from app.services.courses import CourseFormatService, AgeGroupService, LevelService, CourseService, CourseRequestService
 
 router = APIRouter(prefix="/courses", tags=['courses'])
 
@@ -22,8 +26,7 @@ async def create_language(language: LanguageSchema, user: BaseUser = Depends(get
 
 
 @router.get("/get_languages")
-async def get_languages(user: BaseUser = Depends(get_current_user),
-                        session: AsyncSession = Depends(get_async_session)):
+async def get_languages(session: AsyncSession = Depends(get_async_session)):
     language_service = LanguageService(session)
     languages = await language_service.get_languages()
     return languages
@@ -182,20 +185,26 @@ async def create_course(data: CreateCourseSchema, BaseUser=Depends(get_current_s
     return result
 
 
-@router.get('/get_course_by_id')
-async def get_course_by_id(course_id: int, BaseUser=Depends(get_current_user),
-                           session: AsyncSession = Depends(get_async_session)):
+@router.get('/get_course_by_id/{course_id}')
+async def get_course_by_id(course_id: int, session: AsyncSession = Depends(get_async_session)):
     course_service = CourseService(session)
     result = await course_service.get_course_by_id(course_id)
     return result
 
 
 @router.get('/get_courses')
-async def get_courses(BaseUser=Depends(get_current_user),
-                      session: AsyncSession = Depends(get_async_session)):
+async def get_courses(session: AsyncSession = Depends(get_async_session)):
     course_service = CourseService(session)
     result = await course_service.get_courses()
     return result
+
+
+@router.get('/get_user_courses')
+async def get_user_courses(user_id: Optional[int] = None, session: AsyncSession = Depends(get_async_session),
+                           BaseUser=Depends(get_current_user)):
+    service = CourseService(session)
+    res = await service.get_user_courses(BaseUser.id if not user_id else user_id)
+    return res
 
 
 @router.delete('/delete_course')
@@ -249,17 +258,81 @@ async def get_course_requests(session: AsyncSession = Depends(get_async_session)
     return result
 
 
+@router.get('/get_user_course_requests')
+async def get_user_course_requests(session: AsyncSession = Depends(get_async_session),
+                                   BaseUser=Depends(get_current_user)):
+    user_id = BaseUser.id
+    request_service = CourseRequestService(session)
+    requests = await request_service.get_user_requests(user_id)
+    return requests
+
+
 @router.post('/create_group')
-async def create_group(course_id: int, group_name: str, session: AsyncSession = Depends(get_async_session)):
+async def create_group(course_id: int, teacher_id: int, group_name: str,
+                       session: AsyncSession = Depends(get_async_session)):
     service = CourseGroupService(session)
-    group = await service.create_group(course_id, group_name)
+    group = await service.create_group(course_id, group_name, teacher_id)
     return group
 
 
 @router.post('/add_user_to_group')
-async def add_user_to_group(group_id: int, user_id: int, session: AsyncSession = Depends(get_async_session)):
+async def add_user_to_group(group_id: int, user_id: int, session: AsyncSession = Depends(get_async_session),
+                            BaseUser=Depends(get_current_superuser)):
     service = CourseGroupService(session)
     group = await service.add_user_to_group(group_id, user_id)
-    if group:
-        return {"message": "User added to group"}
-    return {"message": "Group or user not found"}
+    return group
+
+
+@router.get('/get_course_students')
+async def get_course_students(course_id: int, session: AsyncSession = Depends(get_async_session),
+                              BaseUser=Depends(get_current_superuser)):
+    service = CourseGroupService(session)
+    users = await service.get_group_students(course_id)
+    return users
+
+
+@router.post('/add_teacher_to_group')
+async def add_teacher_to_group(group_id: int, teacher_id: int, session: AsyncSession = Depends(get_async_session),
+                               BaseUser=Depends(get_current_superuser)):
+    service = CourseGroupService(session)
+    result = await service.assign_teacher_to_group(group_id, teacher_id)
+    return result
+
+
+@router.get('/get_student_marks')
+async def get_student_marks(session: AsyncSession = Depends(get_async_session),
+                            BaseUser=Depends(get_current_user)):
+    service = GradeService(session)
+    marks = await service.get_student_marks(BaseUser.id)
+    return marks
+
+
+@router.post('/add_mark/{user_id}/{group_id}')
+async def add_mark(user_id: int, group_id: int, grade: int, comment: Optional[str] = None,
+                   session: AsyncSession = Depends(get_async_session),
+                   BaseUser=Depends(get_current_superuser)):
+    if grade < 0 or grade > 10:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content="Отметка должна быть в диапазоне от 0 до 10."
+        )
+    service = GradeService(session)
+    res = await service.add_grade(group_id, user_id, grade, comment)
+    return res
+
+
+@router.delete('/delete_mark')
+async def delete_mark(grade_id: int, session: AsyncSession = Depends(get_async_session),
+                      BaseUser=Depends(get_current_superuser)):
+    service = GradeService(session)
+    res = await service.delete_grade(grade_id)
+    return res
+
+
+@router.patch('/edit_mark')
+async def edit_mark(grade_id: int, grade: int = None, comment: str = None,
+                    session: AsyncSession = Depends(get_async_session),
+                    BaseUser=Depends(get_current_superuser)):
+    service = GradeService(session)
+    res = await service.update_grade(grade_id, grade, comment)
+    return res

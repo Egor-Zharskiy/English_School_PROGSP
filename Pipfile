@@ -13,6 +13,7 @@ asyncpg = "*"
 fastapi-users-db-sqlalchemy = "*"
 alembic = "*"
 psycopg2-binary = "*"
+fastapi-admin = "*"
 
 [dev-packages]
 

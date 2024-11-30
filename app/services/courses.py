@@ -1,18 +1,25 @@
 import datetime
 import logging
+from email.headerregistry import Group
 
 from fastapi import HTTPException, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.exc import NoResultFound, IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, insert
+from sqlalchemy import select, delete, insert, update
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import joinedload, class_mapper
 from starlette.status import HTTP_200_OK
 
-from app.models.courses import Language, Course, CourseLevel, CourseGroup, User, GroupUser
-from models.courses import CourseFormat, AgeGroup, Level, CourseRequest
-from schemas.courses import LanguageSchema, CourseFormatSchema, AgeGroupSchema, LevelSchema, CreateCourseSchema, \
+from app.models.courses import Language, Course, CourseLevel, CourseGroup, User, GroupUser, Grade, SchoolComment
+from app.models.courses import CourseFormat, AgeGroup, Level, CourseRequest
+from app.schemas.courses import LanguageSchema, CourseFormatSchema, AgeGroupSchema, LevelSchema, CreateCourseSchema, \
     EditCourseSchema, CourseRequestResponse, EditCourseRequest
+from app.schemas.comments import VerifiedCommentsSchema
+
+
+def model_to_dict(obj):
+    return {column.name: getattr(obj, column.name) for column in class_mapper(obj.__class__).columns}
 
 
 class BaseService:
@@ -485,9 +492,18 @@ class CourseService:
 
     async def get_course_by_id(self, course_id: int):
         try:
-            stmt = select(Course).where(Course.id == course_id)
+            stmt = (
+                select(Course)
+                .where(Course.id == course_id)
+                .options(
+                    joinedload(Course.format),
+                    joinedload(Course.levels),
+                    joinedload(Course.requests),
+                    joinedload(Course.language)
+                )
+            )
             result = await self.session.execute(stmt)
-            course = result.scalars().one()
+            course = result.unique().scalars().one()
             return course
         except NoResultFound:
             raise HTTPException(
@@ -502,9 +518,15 @@ class CourseService:
 
     async def get_courses(self):
         try:
-            statement = select(Course)
+            statement = select(Course).options(
+                joinedload(Course.format),
+                joinedload(Course.levels),
+                joinedload(Course.requests),
+                joinedload(Course.language)
+            )
+
             result = await self.session.execute(statement)
-            courses = result.scalars().all()
+            courses = result.unique().scalars().all()
             return courses
         except NoResultFound as e:
             self.logger.error("Noresult " + str(e))
@@ -577,6 +599,28 @@ class CourseService:
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Unexpected error occurred" + str(e))
+
+    async def get_user_courses(self, user_id: int):
+        result = await self.session.execute(
+            select(CourseGroup)
+            .options(
+                joinedload(CourseGroup.course),
+                joinedload(CourseGroup.teacher)
+            )
+            .join(GroupUser, GroupUser.group_id == CourseGroup.id)
+            .where(GroupUser.user_id == user_id)
+        )
+        course_groups = result.scalars().all()
+        courses = [
+            {
+                "id": group.course.id,
+                "name": group.course.name,
+                "group_name": group.group_name,
+            }
+            for group in course_groups
+        ]
+
+        return courses
 
 
 class CourseRequestService:
@@ -660,13 +704,22 @@ class CourseRequestService:
                 detail="Course format's not found."
             )
 
+    async def get_user_requests(self, user_id: int):
+        stmt = (select(CourseRequest).where(CourseRequest.user_id == user_id)
+        .options(
+            joinedload(CourseRequest.course)
+        ))
+        result = await self.session.execute(stmt)
+        requests = result.scalars().all()
+        return requests
+
 
 class CourseGroupService:
     def __init__(self, session):
         self.session = session
 
-    async def create_group(self, course_id: int, group_name: str):
-        new_group = CourseGroup(course_id=course_id, group_name=group_name)
+    async def create_group(self, course_id: int, group_name: str, teacher_id: int):
+        new_group = CourseGroup(course_id=course_id, group_name=group_name, teacher_id=teacher_id)
         self.session.add(new_group)
         await self.session.commit()
         return new_group
@@ -683,13 +736,289 @@ class CourseGroupService:
         user = user_exists.scalar_one_or_none()
 
         if not group or not user:
-            return None
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content="Group or user not found"
+            )
+
+        user_in_group = await self.session.execute(
+            select(GroupUser).where(
+                (GroupUser.group_id == group_id) & (GroupUser.user_id == user_id)
+            )
+        )
+        if user_in_group.scalar_one_or_none():
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content="User is already a member of this group"
+            )
 
         try:
             stmt = insert(GroupUser).values(group_id=group_id, user_id=user_id)
             await self.session.execute(stmt)
             await self.session.commit()
-            return {"message": "User added to group successfully"}
+            return JSONResponse(status_code=status.HTTP_200_OK, content="User added to group successfully")
         except SQLAlchemyError as e:
             await self.session.rollback()
-            return {"error": str(e)}
+            return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                content=f"Error while adding user to group: {str(e)}")
+
+    async def assign_teacher_to_group(self, group_id: int, teacher_id: int):
+        group_exists = await self.session.execute(
+            select(CourseGroup).where(CourseGroup.id == group_id)
+        )
+        group = group_exists.scalar_one_or_none()
+
+        teacher_exists = await self.session.execute(
+            select(User).where(User.id == teacher_id)
+        )
+        teacher = teacher_exists.scalar_one_or_none()
+
+        if not group or not teacher:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content="Group or teacher not found"
+            )
+
+        try:
+            stmt = update(CourseGroup).where(CourseGroup.id == group_id).values(teacher_id=teacher_id)
+            await self.session.execute(stmt)
+            await self.session.commit()
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content="Teacher assigned to group successfully"
+            )
+        except SQLAlchemyError as e:
+            await self.session.rollback()
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=f"Error while assigning teacher to group: {str(e)}"
+            )
+
+    async def get_group_students(self, course_id: int):
+        try:
+            stmt = (select(User)
+                    .join(GroupUser, GroupUser.user_id == User.id)
+                    .join(CourseGroup, CourseGroup.id == GroupUser.group_id)
+                    .where(CourseGroup.course_id == course_id)
+                    )
+            result = await self.session.execute(stmt)
+            users = result.scalars().all()
+            return users
+        except Exception as e:
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=f"An error occured: {str(e)}")
+
+
+class GradeService:
+    def __init__(self, session):
+        self.session = session
+
+    async def get_student_marks(self, user_id: int):
+        grades = await self.session.execute(
+            select(Grade).
+            options(
+                joinedload(Grade.group).joinedload(CourseGroup.course),
+                joinedload(Grade.group).joinedload(CourseGroup.teacher)
+            ).
+            where(Grade.user_id == user_id).
+            order_by(Grade.date_assigned.desc())
+        )
+        return grades.scalars().all()
+
+    async def add_grade(self, group_id: int, user_id: int, grade: int, comments: str = None):
+        group_exists = await self.session.execute(
+            select(CourseGroup).where(CourseGroup.id == group_id)
+        )
+        group = group_exists.scalar_one_or_none()
+        if not group:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content="Group not found"
+            )
+
+        user_exists = await self.session.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = user_exists.scalar_one_or_none()
+        if not user:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content="User not found"
+            )
+
+        user_in_group = await self.session.execute(
+            select(GroupUser).where(
+                (GroupUser.group_id == group_id) & (GroupUser.user_id == user_id)
+            )
+        )
+        if not user_in_group.scalar_one_or_none():
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content="User is not a member of this group"
+            )
+
+        try:
+            stmt = insert(Grade).values(
+                group_id=group_id,
+                user_id=user_id,
+                grade=grade,
+                comments=comments,
+            )
+            await self.session.execute(stmt)
+            await self.session.commit()
+            return JSONResponse(
+                status_code=status.HTTP_201_CREATED,
+                content="Grade added successfully"
+            )
+        except SQLAlchemyError as e:
+            await self.session.rollback()
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=f"Error while adding grade: {str(e)}"
+            )
+
+    async def delete_grade(self, grade_id: int):
+        grade_exists = await self.session.execute(
+            select(Grade).where(Grade.id == grade_id)
+        )
+        grade = grade_exists.scalar_one_or_none()
+        if not grade:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content="Grade not found"
+            )
+
+        try:
+            await self.session.delete(grade)
+            await self.session.commit()
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content="Grade deleted successfully"
+            )
+        except SQLAlchemyError as e:
+            await self.session.rollback()
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=f"Error while deleting grade: {str(e)}"
+            )
+
+    async def update_grade(self, grade_id: int, grade: float = None, comments: str = None):
+        grade_exists = await self.session.execute(
+            select(Grade).where(Grade.id == grade_id)
+        )
+        existing_grade = grade_exists.scalar_one_or_none()
+        if not existing_grade:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content="Grade not found"
+            )
+
+        if grade is not None and (grade < 0 or grade > 10):
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content="Grade must be between 0 and 10"
+            )
+
+        try:
+            if grade is not None:
+                existing_grade.grade = grade
+            if comments is not None:
+                existing_grade.comments = comments
+
+            await self.session.commit()
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content="Grade updated successfully"
+            )
+        except SQLAlchemyError as e:
+            await self.session.rollback()
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=f"Error while updating grade: {str(e)}"
+            )
+
+
+class SchoolCommentsService:
+    def __init__(self, session: AsyncSession):
+        self.logger = logging.getLogger("SchoolCommentService")
+        self.session = session
+
+    async def add_school_comment(self, user_id: int, comment: str):
+        if not comment.strip():
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content="Comment cannot be empty"
+            )
+
+        try:
+            stmt = insert(SchoolComment).values(
+                user_id=user_id,
+                comment=comment,
+            )
+            await self.session.execute(stmt)
+            await self.session.commit()
+            return JSONResponse(
+                status_code=status.HTTP_201_CREATED,
+                content="Comment added successfully"
+            )
+        except SQLAlchemyError as e:
+            await self.session.rollback()
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=f"Error while adding comment: {str(e)}"
+            )
+
+    async def verify_comment(self, comment_id: int):
+        try:
+            stmt = update(SchoolComment).where(SchoolComment.id == comment_id).values(is_verified=True)
+            await self.session.execute(stmt)
+            await self.session.commit()
+            return JSONResponse(
+                status_code=status.HTTP_201_CREATED,
+                content="Comment is verified"
+            )
+        except SQLAlchemyError as e:
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=f"Error while verifying comment: {str(e)}"
+            )
+
+    async def delete_comment(self, comment_id: int):
+        try:
+            stmt = await self.session.execute(select(SchoolComment).where(SchoolComment.id == comment_id))
+            comment = stmt.scalars().one()
+
+            await self.session.delete(comment)
+            await self.session.commit()
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content="Comment deleted successfully")
+
+        except NoResultFound:
+            await self.session.rollback()
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=f"Comment not found")
+        except SQLAlchemyError as e:
+            await self.session.rollback()
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=f"Error while deleting comment: {str(e)}")
+
+    async def get_verified_comments(self):
+        stmt = select(SchoolComment).where(SchoolComment.is_verified == True).options(
+            joinedload(SchoolComment.user)
+        )
+
+        query = await self.session.execute(stmt)
+        comments = query.scalars().all()
+
+        filtered_query = [VerifiedCommentsSchema.model_validate(comment).model_dump() for comment in comments]
+        return filtered_query
+
+    async def get_unverified_comments(self):
+        stmt = select(SchoolComment).where(SchoolComment.is_verified == False)
+        query = await self.session.execute(stmt)
+        comments = query.scalars().all()
+        return comments

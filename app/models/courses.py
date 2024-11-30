@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Float, DateTime, Boolean, JSON, TIMESTAMP
+from sqlalchemy import Column, Integer, String, ForeignKey, Float, DateTime, Boolean, JSON, TIMESTAMP, Text
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
 
@@ -19,6 +19,9 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String, nullable=False)
     username = Column(String, nullable=False)
+    first_name = Column(String)
+    last_name = Column(String)
+    phone_number = Column(String(15), unique=True)
     hashed_password = Column(String, nullable=False)
     registered_at = Column(TIMESTAMP, default=datetime.now)
     role_id = Column(Integer, ForeignKey("role.id"))
@@ -28,6 +31,8 @@ class User(Base):
 
     requests = relationship("CourseRequest", back_populates="user")
     groups = relationship("CourseGroup", secondary="group_user", back_populates="users")
+    teacher_groups = relationship("CourseGroup", back_populates="teacher")
+    school_comments = relationship("SchoolComment", back_populates="user", cascade="all, delete-orphan")
 
 
 class CourseRequest(Base):
@@ -51,9 +56,11 @@ class CourseGroup(Base):
     id = Column(Integer, primary_key=True)
     course_id = Column(Integer, ForeignKey("course.id"), nullable=False)
     group_name = Column(String, nullable=False)
+    teacher_id = Column(Integer, ForeignKey("user.id"), nullable=False)
 
     course = relationship("Course", back_populates="groups")
     users = relationship("User", secondary="group_user", back_populates="groups")
+    teacher = relationship("User", back_populates="teacher_groups")
 
 
 class GroupUser(Base):
@@ -63,8 +70,8 @@ class GroupUser(Base):
     group_id = Column(Integer, ForeignKey("course_group.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("user.id"), nullable=False)
 
-    group = relationship("CourseGroup")
-    user = relationship("User")
+    group = relationship("CourseGroup", overlaps="users,groups")
+    user = relationship("User", overlaps="users,groups")
 
 
 class Language(Base):
@@ -73,6 +80,7 @@ class Language(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False, unique=True)
     rus_name = Column(String, nullable=False, unique=True)
+    courses = relationship("Course", back_populates="language")
 
 
 class CourseFormat(Base):
@@ -80,6 +88,8 @@ class CourseFormat(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String, unique=True, nullable=False)
+
+    courses = relationship("Course", back_populates="format")
 
 
 class AgeGroup(Base):
@@ -108,6 +118,8 @@ class Course(Base):
     levels = relationship("CourseLevel", back_populates="course")
     requests = relationship("CourseRequest", back_populates="course")
     groups = relationship("CourseGroup", back_populates="course")
+    format = relationship("CourseFormat", back_populates="courses")
+    language = relationship("Language", back_populates="courses")
 
 
 class Level(Base):
@@ -130,3 +142,29 @@ class CourseLevel(Base):
 
     course = relationship("Course", back_populates="levels")
     level = relationship("Level", back_populates="courses")
+
+
+class Grade(Base):
+    __tablename__ = "grade"
+
+    id = Column(Integer, primary_key=True)
+    group_id = Column(Integer, ForeignKey("course_group.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+    grade = Column(Integer, nullable=False)
+    comments = Column(String, nullable=True)
+    date_assigned = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    group = relationship("CourseGroup")
+    user = relationship("User")
+
+
+class SchoolComment(Base):
+    __tablename__ = 'school_comments'
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('user.id'), nullable=False)
+    comment = Column(Text, nullable=False)
+    date_added = Column(DateTime, default=datetime.utcnow)
+    is_verified = Column(Boolean, default=False)
+
+    user = relationship("User", back_populates="school_comments")

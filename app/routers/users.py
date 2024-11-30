@@ -59,3 +59,18 @@ async def get_users(user: BaseUser = Depends(get_current_superuser),
     result = await session.execute(select(User))
     users = result.scalars().all()
     return users
+
+
+@router.get('/get_roles', tags=['auth'])
+async def get_roles(user: BaseUser = Depends(get_current_superuser)):
+    ...
+
+
+@router.post('/edit_user_role', tags=['auth'])
+async def edit_role(user_id: int, role_id: int, user: BaseUser = Depends(get_current_superuser)):
+    ...
+
+
+@router.get('/is_admin', tags=['auth'])
+async def check_is_admin(session: AsyncSession = Depends(get_async_session), user: BaseUser = Depends(get_current_user)):
+    return user.is_superuser

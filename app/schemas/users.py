@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Optional
 
 from fastapi_users import schemas, models
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class UserRead(schemas.BaseUser[int]):
@@ -34,3 +35,31 @@ class BaseUser(BaseModel):
     first_name: str
     last_name: str
     phone_number: str
+
+
+class Role(BaseModel):
+    id: int
+    name: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GetUserAdminPage(BaseModel):
+    id: int
+    username: str
+    email: str
+    first_name: str
+    last_name: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+
+class GetDetailedUserAdminPage(BaseModel):
+    id: int
+    username: str
+    email: str
+    first_name: str
+    last_name: str
+    phone_number: str
+    registered_at: datetime
+    role: Role
+    model_config = ConfigDict(from_attributes=True)

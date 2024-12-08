@@ -1,6 +1,5 @@
 import datetime
 import logging
-from email.headerregistry import Group
 
 from fastapi import HTTPException, status
 from fastapi.encoders import jsonable_encoder
@@ -8,14 +7,15 @@ from sqlalchemy.exc import NoResultFound, IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, insert, update
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import joinedload, class_mapper
-from starlette.status import HTTP_200_OK
+from sqlalchemy.orm import joinedload, class_mapper, selectinload
+from starlette.status import HTTP_200_OK, HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE
 
 from app.models.courses import Language, Course, CourseLevel, CourseGroup, User, GroupUser, Grade, SchoolComment
 from app.models.courses import CourseFormat, AgeGroup, Level, CourseRequest
 from app.schemas.courses import LanguageSchema, CourseFormatSchema, AgeGroupSchema, LevelSchema, CreateCourseSchema, \
-    EditCourseSchema, CourseRequestResponse, EditCourseRequest
-from app.schemas.comments import VerifiedCommentsSchema
+    EditCourseSchema, CourseRequestResponse, EditCourseRequest, LevelAdminSchema, CourseRequestDetailedResponse, \
+    CourseGroupSchema
+from app.schemas.comments import VerifiedCommentsSchema, CommentsSchema
 
 
 def model_to_dict(obj):
@@ -385,7 +385,8 @@ class LevelService:
         try:
             stmt = select(Level)
             result = await self.session.execute(stmt)
-            levels = result.scalars().all()
+            query = result.scalars().all()
+            levels = [LevelAdminSchema.model_validate(item).model_dump() for item in query]
             return levels
         except NoResultFound as e:
             self.logger.error('NoResult ' + str(e))
@@ -704,6 +705,24 @@ class CourseRequestService:
                 detail="Course format's not found."
             )
 
+    async def get_course_request(self, request_id: int):
+        try:
+            stmt = select(CourseRequest).where(CourseRequest.id == request_id).options(
+                joinedload(CourseRequest.user),
+                joinedload(CourseRequest.course).joinedload(Course.language)
+
+            )
+            query = await self.session.execute(stmt)
+            course_request = query.scalars().one()
+            filtered_request = CourseRequestDetailedResponse.model_validate(course_request).model_dump()
+            return filtered_request
+        except NoResultFound as e:
+            self.logger.error(str(e))
+            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course request with given id not found")
+        except Exception as e:
+            self.logger.error(str(e))
+            return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred")
+
     async def get_user_requests(self, user_id: int):
         stmt = (select(CourseRequest).where(CourseRequest.user_id == user_id)
         .options(
@@ -717,6 +736,7 @@ class CourseRequestService:
 class CourseGroupService:
     def __init__(self, session):
         self.session = session
+        self.logger = logging.getLogger("CourseGroupService")
 
     async def create_group(self, course_id: int, group_name: str, teacher_id: int):
         new_group = CourseGroup(course_id=course_id, group_name=group_name, teacher_id=teacher_id)
@@ -809,6 +829,63 @@ class CourseGroupService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content=f"An error occured: {str(e)}")
 
+    async def get_groups(self):
+        try:
+            stmt = select(CourseGroup).options(
+                joinedload(CourseGroup.course),
+                joinedload(CourseGroup.teacher),
+
+            )
+
+            query = await self.session.execute(stmt)
+            groups = query.scalars().all()
+            filtered_data = [CourseGroupSchema.model_validate(item).model_dump() for item in groups]
+            return filtered_data
+        except Exception as e:
+            print(str(e))
+
+    async def get_detailed_group(self, group_id: int):
+        try:
+            stmt = select(CourseGroup).where(CourseGroup.id == group_id).options(
+                joinedload(CourseGroup.teacher),
+                joinedload(CourseGroup.course),
+                selectinload(CourseGroup.users)
+            )
+            query = await self.session.execute(stmt)
+            group = query.scalars().one()
+            return group
+        except NoResultFound as e:
+            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='group not found')
+        except Exception as e:
+            return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='an error occurred')
+
+    async def remove_user_from_group(self, user_id: int, group_id: int):
+        stmt = (
+            delete(GroupUser)
+            .where(GroupUser.group_id == group_id, GroupUser.user_id == user_id)
+            .returning(GroupUser.id)
+        )
+        result = await self.session.execute(stmt)
+        deleted_row = result.scalar_one_or_none()
+
+        if deleted_row is None:
+            raise NoResultFound(f"User {user_id} not found in group {group_id}.")
+
+        await self.session.commit()
+        return {"message": f"User {user_id} removed from group {group_id}."}
+
+    async def get_teacher_groups(self, teacher_id: int):
+        try:
+            stmt = select(CourseGroup).where(CourseGroup.teacher_id == teacher_id)
+            query = await self.session.execute(stmt)
+            teacher_groups = query.scalars().all()
+            return teacher_groups
+        except NoResultFound as e:
+            self.logger.error(f"error in get_teacher_groups: {str(e)}")
+            return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group with given ID not found")
+        # except Exception as e:
+        #     return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred")
+
 
 class GradeService:
     def __init__(self, session):
@@ -872,6 +949,7 @@ class GradeService:
                 content="Grade added successfully"
             )
         except SQLAlchemyError as e:
+            print(str(e))
             await self.session.rollback()
             return JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -937,6 +1015,15 @@ class GradeService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content=f"Error while updating grade: {str(e)}"
             )
+
+    async def get_group_marks(self, group_id: int):
+        stmt = select(Grade).where(Grade.group_id == group_id).options(
+            joinedload(Grade.user)
+        )
+        query = await self.session.execute(stmt)
+        res = query.scalars().all()
+        return res
+
 
 
 class SchoolCommentsService:
@@ -1022,3 +1109,12 @@ class SchoolCommentsService:
         query = await self.session.execute(stmt)
         comments = query.scalars().all()
         return comments
+
+    async def get_all_comments(self):
+        stmt = select(SchoolComment).options(
+            joinedload(SchoolComment.user)
+        )
+        query = await self.session.execute(stmt)
+        comments = query.scalars().all()
+        filtered_comments = [CommentsSchema.model_validate(comment).model_dump() for comment in comments]
+        return filtered_comments

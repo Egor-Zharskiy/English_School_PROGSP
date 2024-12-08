@@ -14,3 +14,8 @@ class VerifiedCommentsSchema(BaseModel):
     date_added: datetime
     user: UserCommentSchema
     model_config = ConfigDict(from_attributes=True)
+
+
+class CommentsSchema(VerifiedCommentsSchema):
+    id: int
+    is_verified: bool

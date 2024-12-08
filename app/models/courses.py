@@ -12,6 +12,8 @@ class Role(Base):
     name = Column(String, nullable=False)
     permissions = Column(JSON)
 
+    users = relationship("User", back_populates="role")
+
 
 class User(Base):
     __tablename__ = "user"
@@ -32,7 +34,8 @@ class User(Base):
     requests = relationship("CourseRequest", back_populates="user")
     groups = relationship("CourseGroup", secondary="group_user", back_populates="users")
     teacher_groups = relationship("CourseGroup", back_populates="teacher")
-    school_comments = relationship("SchoolComment", back_populates="user", cascade="all, delete-orphan")
+    school_comments = relationship("SchoolComment", back_populates="user")
+    role = relationship("Role", back_populates="users")
 
 
 class CourseRequest(Base):
@@ -67,8 +70,8 @@ class GroupUser(Base):
     __tablename__ = "group_user"
 
     id = Column(Integer, primary_key=True)
-    group_id = Column(Integer, ForeignKey("course_group.id"), nullable=False)
-    user_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+    group_id = Column(Integer, ForeignKey("course_group.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False)
 
     group = relationship("CourseGroup", overlaps="users,groups")
     user = relationship("User", overlaps="users,groups")

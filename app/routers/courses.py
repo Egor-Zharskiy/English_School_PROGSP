@@ -1,4 +1,3 @@
-from logging import setLogRecordFactory
 from typing import Optional
 
 from fastapi import Depends, APIRouter, status
@@ -13,6 +12,7 @@ from app.services.courses import LanguageService, CourseGroupService, GradeServi
 from app.schemas.courses import CourseFormatSchema, AgeGroupSchema, LevelSchema, CreateCourseRequestSchema, \
     EditCourseRequest
 from app.services.courses import CourseFormatService, AgeGroupService, LevelService, CourseService, CourseRequestService
+from app.services.users import check_grade
 
 router = APIRouter(prefix="/courses", tags=['courses'])
 
@@ -32,7 +32,7 @@ async def get_languages(session: AsyncSession = Depends(get_async_session)):
     return languages
 
 
-@router.get('/get_language_by_id')
+@router.get('/get_language_by_id/{language_id}')
 async def get_language(language_id: int, user: BaseUser = Depends(get_current_user),
                        session: AsyncSession = Depends(get_async_session)):
     language_service = LanguageService(session)
@@ -40,7 +40,7 @@ async def get_language(language_id: int, user: BaseUser = Depends(get_current_us
     return result
 
 
-@router.patch("/edit_language")
+@router.patch("/edit_language/{language_id}")
 async def edit_language(language_id: int, language: LanguageSchema, user: BaseUser = Depends(get_current_superuser),
                         session: AsyncSession = Depends(get_async_session)):
     language_service = LanguageService(session)
@@ -48,7 +48,7 @@ async def edit_language(language_id: int, language: LanguageSchema, user: BaseUs
     return edited_language
 
 
-@router.delete("/delete_language")
+@router.delete("/delete_language/{language_id}")
 async def delete_language(language_id: int, user: BaseUser = Depends(get_current_superuser),
                           session: AsyncSession = Depends(get_async_session)):
     language_service = LanguageService(session)
@@ -121,7 +121,7 @@ async def get_age_groups(BaseUser=Depends(get_current_user),
     return result
 
 
-@router.delete("/delete_age_group")
+@router.delete("/delete_age_group/{group_id}")
 async def delete_age_group(group_id: int, BaseUser=Depends(get_current_superuser),
                            session: AsyncSession = Depends(get_async_session)):
     age_group_service = AgeGroupService(session)
@@ -129,7 +129,7 @@ async def delete_age_group(group_id: int, BaseUser=Depends(get_current_superuser
     return result
 
 
-@router.patch("/edit_age_group")
+@router.patch("/edit_age_group/{group_id}/")
 async def edit_age_group(group_id: int, group: AgeGroupSchema, BaseUser=Depends(get_current_superuser),
                          session: AsyncSession = Depends(get_async_session)):
     age_group_service = AgeGroupService(session)
@@ -169,7 +169,7 @@ async def delete_level(level_id: int, BaseUser=Depends(get_current_superuser),
     return result
 
 
-@router.patch('/edit_level')
+@router.patch('/edit_level/{level_id}/')
 async def edit_level(level_id: int, data: LevelSchema, BaseUser=Depends(get_current_superuser),
                      session: AsyncSession = Depends(get_async_session)):
     level_service = LevelService(session)
@@ -199,7 +199,7 @@ async def get_courses(session: AsyncSession = Depends(get_async_session)):
     return result
 
 
-@router.get('/get_user_courses')
+@router.get('/get_user_courses/{user_id}')
 async def get_user_courses(user_id: Optional[int] = None, session: AsyncSession = Depends(get_async_session),
                            BaseUser=Depends(get_current_user)):
     service = CourseService(session)
@@ -215,7 +215,7 @@ async def delete_course(course_id: int, BaseUser=Depends(get_current_superuser),
     return result
 
 
-@router.patch('/edit_course')
+@router.patch('/edit_course/{course_id}')
 async def edit_course(course_id: int, data: EditCourseSchema, BaseUser=Depends(get_current_superuser),
                       session: AsyncSession = Depends(get_async_session)):
     course_service = CourseService(session)
@@ -233,7 +233,7 @@ async def create_course_request(data: CreateCourseRequestSchema,
     return result
 
 
-@router.delete('/delete_course_request')
+@router.delete('/delete_course_request/{course_id}')
 async def delete_course_request(course_id: int, session: AsyncSession = Depends(get_async_session),
                                 BaseUser=Depends(get_current_superuser)):
     request_service = CourseRequestService(session)
@@ -241,7 +241,7 @@ async def delete_course_request(course_id: int, session: AsyncSession = Depends(
     return result
 
 
-@router.patch('/edit_course_request')
+@router.patch('/edit_course_request/{course_request_id}')
 async def edit_course_request(course_request_id: int, data: EditCourseRequest,
                               session: AsyncSession = Depends(get_async_session),
                               BaseUser=Depends(get_current_superuser)):
@@ -258,16 +258,25 @@ async def get_course_requests(session: AsyncSession = Depends(get_async_session)
     return result
 
 
-@router.get('/get_user_course_requests')
-async def get_user_course_requests(session: AsyncSession = Depends(get_async_session),
-                                   BaseUser=Depends(get_current_user)):
-    user_id = BaseUser.id
+@router.get("/get_course_request/{request_id}")
+async def get_course_request(request_id: int, session: AsyncSession = Depends(get_async_session),
+                             BaseUser=Depends(get_current_user)):
     request_service = CourseRequestService(session)
-    requests = await request_service.get_user_requests(user_id)
+    request = await request_service.get_course_request(request_id)
+    return request
+
+
+@router.get('/get_user_course_requests/{user_id}')
+async def get_user_course_requests(user_id: Optional[int] = None, session: AsyncSession = Depends(get_async_session),
+                                   BaseUser=Depends(get_current_user)):
+    request_service = CourseRequestService(session)
+
+    requests = await request_service.get_user_requests(
+        BaseUser.id if not user_id else user_id)
     return requests
 
 
-@router.post('/create_group')
+@router.post('/create_group/{course_id}/{teacher_id}/{group_name}')
 async def create_group(course_id: int, teacher_id: int, group_name: str,
                        session: AsyncSession = Depends(get_async_session)):
     service = CourseGroupService(session)
@@ -275,7 +284,7 @@ async def create_group(course_id: int, teacher_id: int, group_name: str,
     return group
 
 
-@router.post('/add_user_to_group')
+@router.post('/add_user_to_group/{group_id}/{user_id}')
 async def add_user_to_group(group_id: int, user_id: int, session: AsyncSession = Depends(get_async_session),
                             BaseUser=Depends(get_current_superuser)):
     service = CourseGroupService(session)
@@ -291,7 +300,42 @@ async def get_course_students(course_id: int, session: AsyncSession = Depends(ge
     return users
 
 
-@router.post('/add_teacher_to_group')
+@router.get('/get_groups')
+async def get_groups(session: AsyncSession = Depends(get_async_session),
+                     BaseUser=Depends(get_current_superuser)):
+    service = CourseGroupService(session)
+    groups = await service.get_groups()
+    return groups
+
+# @router.get('/get_teacher_groups/{teacher_id}')
+# async def
+
+
+@router.get('/get_detailed_group/{group_id}')
+async def get_detailed_group(group_id: int, session: AsyncSession = Depends(get_async_session),
+                             BaseUser=Depends(get_current_superuser)):
+    service = CourseGroupService(session)
+    group = await service.get_detailed_group(group_id)
+    return group
+
+
+@router.get('/get_teacher_groups/{teacher_id}')
+async def get_teacher_groups(teacher_id: int, session: AsyncSession = Depends(get_async_session),
+                             BaseUser=Depends(get_current_user)):
+    service = CourseGroupService(session)
+    teacher_groups = await service.get_teacher_groups(teacher_id)
+    return teacher_groups
+
+
+@router.delete('/remove_user_from_group/{user_id}/{group_id}')
+async def remove_user_from_group(user_id: int, group_id: int, session: AsyncSession = Depends(get_async_session),
+                                 BaseUser=Depends(get_current_superuser)):
+    service = CourseGroupService(session)
+    result = await service.remove_user_from_group(user_id, group_id)
+    return result
+
+
+@router.post('/add_teacher_to_group/{group_id}/{teacher_id}')
 async def add_teacher_to_group(group_id: int, teacher_id: int, session: AsyncSession = Depends(get_async_session),
                                BaseUser=Depends(get_current_superuser)):
     service = CourseGroupService(session)
@@ -311,7 +355,7 @@ async def get_student_marks(session: AsyncSession = Depends(get_async_session),
 async def add_mark(user_id: int, group_id: int, grade: int, comment: Optional[str] = None,
                    session: AsyncSession = Depends(get_async_session),
                    BaseUser=Depends(get_current_superuser)):
-    if grade < 0 or grade > 10:
+    if not check_grade(grade):
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content="Отметка должна быть в диапазоне от 0 до 10."
@@ -321,7 +365,7 @@ async def add_mark(user_id: int, group_id: int, grade: int, comment: Optional[st
     return res
 
 
-@router.delete('/delete_mark')
+@router.delete('/delete_mark/{grade_id}')
 async def delete_mark(grade_id: int, session: AsyncSession = Depends(get_async_session),
                       BaseUser=Depends(get_current_superuser)):
     service = GradeService(session)
@@ -329,10 +373,19 @@ async def delete_mark(grade_id: int, session: AsyncSession = Depends(get_async_s
     return res
 
 
-@router.patch('/edit_mark')
+@router.patch('/edit_mark/{grade_id}')
 async def edit_mark(grade_id: int, grade: int = None, comment: str = None,
                     session: AsyncSession = Depends(get_async_session),
                     BaseUser=Depends(get_current_superuser)):
     service = GradeService(session)
+    print(comment, grade)
     res = await service.update_grade(grade_id, grade, comment)
+    return res
+
+
+@router.get('/get_group_marks/{group_id}')
+async def get_group_marks(group_id: int, session: AsyncSession = Depends(get_async_session),
+                          BaseUser=Depends(get_current_superuser)):
+    service = GradeService(session)
+    res = await service.get_group_marks(group_id)
     return res

@@ -2,6 +2,8 @@ from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.users import GetUserAdminPage
+
 
 class LanguageSchema(BaseModel):
     name: str
@@ -21,6 +23,12 @@ class AgeGroupSchema(BaseModel):
 class LevelSchema(BaseModel):
     name: str
     description: str
+
+
+class LevelAdminSchema(BaseModel):
+    id: int
+    name: str
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CreateCourseSchema(BaseModel):
@@ -64,9 +72,61 @@ class CourseRequestResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class GetBriedLanguageInfo(BaseModel):
+    id: int
+    name: str
+    rus_name: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GetBriefCourseInfo(BaseModel):
+    id: int
+    name: str
+    language: GetBriedLanguageInfo
+    model_config = ConfigDict(from_attributes=True)
+
+
 class EditCourseRequest(BaseModel):
     status: Optional[str] = None
     is_processed: Optional[bool] = None
     is_archived: Optional[bool] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CourseRequestDetailedResponse(EditCourseRequest):
+    id: int
+    user: GetUserAdminPage
+    course: GetBriefCourseInfo
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GetCourseSchema(BaseModel):
+    group_size: int
+    id: int
+    name: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GetTeacherSchema(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
+    email: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroupSchema(BaseModel):
+    id: int
+    group_name: str
+    teacher: GetTeacherSchema
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CourseGroupSchema(BaseModel):
+    id: int
+    group_name: str
+    teacher: GetTeacherSchema
+    course: GetCourseSchema
 
     model_config = ConfigDict(from_attributes=True)
